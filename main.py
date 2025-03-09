@@ -5,6 +5,10 @@ from alpaca.trading.enums import OrderSide, TimeInForce, OrderType, QueryOrderSt
 import pandas as pd
 from datetime import datetime, timedelta
 
+# Initialize session state for messages
+if 'message' not in st.session_state:
+    st.session_state.message = None
+
 def create_trading_client():
     api_key = "PK5K5WNB8QPSATC3GVLB"
     secret_key = "GCeYxJenpWlwSZwzBm2Cj7uBYOYYSt04vm1QHdo1"
@@ -23,7 +27,10 @@ def place_market_order(symbol, qty, side):
             type=OrderType.MARKET
         )
         order = client.submit_order(order_request)
-        return f"Order placed successfully: {side.value.title()} {qty} {symbol}"
+        # Store message in session state
+        st.session_state.message = f"Order placed successfully: {side.value.title()} {qty} {symbol}"
+        # Force a refresh of the UI to update current orders
+        st.rerun()
     except Exception as e:
         return f"Error placing order: {str(e)}"
 
@@ -66,6 +73,7 @@ def get_orders(start_date=None, end_date=None, status=QueryOrderStatus.ALL):
         orders_data = []
         for order in orders:
             orders_data.append({
+                "Order ID": str(order.id),  # Convert UUID to string
                 "Symbol": order.symbol,
                 "Side": order.side.value.title(),  # Convert to title case (Buy/Sell)
                 "Quantity": order.qty,
@@ -79,8 +87,70 @@ def get_orders(start_date=None, end_date=None, status=QueryOrderStatus.ALL):
     except Exception as e:
         return f"Error fetching orders: {str(e)}"
 
+def get_order_by_id(order_id):
+    client = create_trading_client()
+    try:
+        order = client.get_order_by_id(order_id)
+        return order
+    except Exception as e:
+        return f"Error fetching order: {str(e)}"
+
+def cancel_order(order_id):
+    client = create_trading_client()
+    try:
+        client.cancel_order_by_id(order_id)
+        # Store message in session state
+        st.session_state.message = f"Order {order_id} cancelled successfully"
+        # Force a refresh of the UI to update current orders
+        st.rerun()
+    except Exception as e:
+        return f"Error cancelling order: {str(e)}"
+
+def close_position_by_symbol(symbol):
+    client = create_trading_client()
+    try:
+        client.close_position(symbol)
+        # Store message in session state
+        st.session_state.message = f"Position for {symbol} closed successfully"
+        # Force a refresh of the UI to update positions
+        st.rerun()
+    except Exception as e:
+        return f"Error closing position: {str(e)}"
+
+def get_current_orders():
+    client = create_trading_client()
+    try:
+        # Request only open orders
+        request_params = GetOrdersRequest(
+            status=QueryOrderStatus.OPEN,
+            limit=100
+        )
+        
+        orders = client.get_orders(request_params)
+        
+        orders_data = []
+        for order in orders:
+            orders_data.append({
+                "Order ID": str(order.id),
+                "Symbol": order.symbol,
+                "Side": order.side.value.title(),
+                "Quantity": order.qty,
+                "Order Type": order.type.value.title(),
+                "Status": order.status.value.title(),
+                "Submitted At": order.submitted_at.strftime("%Y-%m-%d %H:%M:%S") if order.submitted_at else "N/A"
+            })
+        return orders_data
+    except Exception as e:
+        return f"Error fetching current orders: {str(e)}"
+
 def main():
     st.title("Crypto Trading Dashboard")
+
+    # Display message from session state if there is one
+    if st.session_state.message:
+        st.success(st.session_state.message)
+        # Clear the message after displaying it
+        st.session_state.message = None
 
     # Trading Section
     st.header("Trading Actions")
@@ -95,7 +165,8 @@ def main():
         if st.button("Buy"):
             if buy_symbol and buy_qty > 0:
                 result = place_market_order(buy_symbol, buy_qty, OrderSide.BUY)
-                st.write(result)
+                if result:  # If there was an error, display it
+                    st.write(result)
             else:
                 st.write("Please enter valid symbol and quantity")
 
@@ -107,7 +178,8 @@ def main():
         if st.button("Sell"):
             if sell_symbol and sell_qty > 0:
                 result = place_market_order(sell_symbol, sell_qty, OrderSide.SELL)
-                st.write(result)
+                if result:  # If there was an error, display it
+                    st.write(result)
             else:
                 st.write("Please enter valid symbol and quantity")
 
@@ -118,7 +190,8 @@ def main():
             client = create_trading_client()
             try:
                 client.close_all_positions(cancel_orders=True)
-                st.write("All positions closed successfully")
+                st.session_state.message = "All positions closed successfully"
+                st.rerun()
             except Exception as e:
                 st.write(f"Error closing positions: {str(e)}")
         
@@ -127,7 +200,8 @@ def main():
             client = create_trading_client()
             try:
                 client.cancel_orders()
-                st.write("All orders cancelled successfully")
+                st.session_state.message = "All orders cancelled successfully"
+                st.rerun()
             except Exception as e:
                 st.write(f"Error cancelling orders: {str(e)}")
 
@@ -235,6 +309,86 @@ def main():
             st.write("No orders in the selected date range")
     else:
         st.write(orders_data)
+    
+    # Display Current Orders (unfilled) - Moved after Order History
+    st.header("Current Orders")
+    current_orders = get_current_orders()
+
+    if isinstance(current_orders, list):
+        if current_orders:
+            # Create a DataFrame and add an action column
+            df = pd.DataFrame(current_orders)
+            
+            # Display the table
+            st.table(df)
+            
+            # Add a section to cancel a specific order
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                if current_orders:  # Check if there are any orders to select
+                    order_id_to_cancel = st.selectbox(
+                        "Select Order ID to cancel",
+                        [order["Order ID"] for order in current_orders],
+                        key="cancel_order_select"
+                    )
+                else:
+                    st.write("No orders to cancel")
+            with col2:
+                if current_orders:  # Only show button if there are orders
+                    if st.button("Cancel Selected Order"):
+                        result = cancel_order(order_id_to_cancel)
+                        if result:  # If there was an error, display it
+                            st.write(result)
+        else:
+            st.write("No open orders")
+    else:
+        st.write(current_orders)  # Display error message
+
+    # Order Management Section
+    st.header("Order Management")
+    order_id_to_manage = st.text_input("Enter Order ID to monitor/manage", "")
+
+    if order_id_to_manage:
+        order = get_order_by_id(order_id_to_manage)
+        
+        if isinstance(order, str):  # Error message
+            st.error(order)
+        else:
+            # Create columns for order details
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("### Order Details")
+                st.write(f"**Symbol:** {order.symbol}")
+                st.write(f"**Side:** {order.side.value.title()}")
+                st.write(f"**Quantity:** {order.qty}")
+                st.write(f"**Type:** {order.type.value.title()}")
+                st.write(f"**Status:** {order.status.value.title()}")
+            
+            with col2:
+                st.write("### Order Timing")
+                submitted_at = order.submitted_at.strftime("%Y-%m-%d %H:%M:%S") if order.submitted_at else "N/A"
+                st.write(f"**Submitted At:** {submitted_at}")
+                
+                filled_at = order.filled_at.strftime("%Y-%m-%d %H:%M:%S") if order.filled_at else "Not filled yet"
+                st.write(f"**Filled At:** {filled_at}")
+                
+                filled_price = f"${float(order.filled_avg_price):,.2f}" if order.filled_avg_price else "Not filled yet"
+                st.write(f"**Filled Price:** {filled_price}")
+            
+            # Action buttons based on order status
+            if order.status.value in ["new", "accepted", "pending_new", "accepted_for_bidding"]:
+                if st.button("Cancel Order"):
+                    result = cancel_order(order_id_to_manage)
+                    if result:  # If there was an error, display it
+                        st.write(result)
+            elif order.status.value == "filled":
+                if st.button(f"Close Position for {order.symbol}"):
+                    result = close_position_by_symbol(order.symbol)
+                    if result:  # If there was an error, display it
+                        st.write(result)
+            else:
+                st.write(f"Order is in {order.status.value} state. No actions available.")
 
 if __name__ == "__main__":
     main()
