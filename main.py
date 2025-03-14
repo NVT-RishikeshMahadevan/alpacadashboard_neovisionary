@@ -10,8 +10,8 @@ if 'message' not in st.session_state:
     st.session_state.message = None
 
 def create_trading_client():
-    api_key = "PK5K5WNB8QPSATC3GVLB"
-    secret_key = "GCeYxJenpWlwSZwzBm2Cj7uBYOYYSt04vm1QHdo1"
+    api_key = "PK25YZNBYBYX0XQJNK5A"
+    secret_key = "CfZx1CtNITOdYKpwxVYCec02k6WBT0EJBYSS5WgZ"
     return TradingClient(api_key=api_key, secret_key=secret_key, paper=True)
 
 def place_market_order(symbol, qty, side):
